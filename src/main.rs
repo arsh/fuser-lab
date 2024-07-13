@@ -1,10 +1,19 @@
 use clap::*;
 use fuser::MountOption;
 use simple::SimpleFS;
+use tracing_subscriber;
 
 mod simple;
-
+fn setup_logging() {
+    let default_subscriber = tracing_subscriber::fmt::Subscriber::builder()
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    tracing::subscriber::set_global_default(default_subscriber)
+        .expect("setting tracing default failed");
+}
 fn main() {
+    setup_logging();
+
     let matches = Command::new("hello")
         .version(crate_version!())
         .author("Christopher Berner")

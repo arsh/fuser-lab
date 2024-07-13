@@ -8,6 +8,8 @@ use std::fs::{self, File};
 use std::os::unix::fs::MetadataExt;
 use std::time::{Duration, UNIX_EPOCH};
 
+use tracing::{error, trace};
+
 const TTL: Duration = Duration::from_secs(1); // 1 second
 
 const HELLO_DIR_ATTR: FileAttr = FileAttr {
@@ -84,8 +86,11 @@ impl SimpleFS {
 
 impl Filesystem for SimpleFS {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        println!("lookup(parent={}, name={:?})", parent, name);
-
+        trace!(
+            "lookup(parent={}, name={:?})",
+            parent,
+            name.to_string_lossy()
+        );
         if parent != 1 {
             // we do not support directories
             reply.error(ENOENT);
@@ -98,14 +103,14 @@ impl Filesystem for SimpleFS {
                 reply.entry(&TTL, &self.file_attributes(&md), 0);
             }
             Err(err) => {
-                println!("lookup error: {}", err);
+                error!("lookup error: {}", err);
                 reply.error(ENOENT);
             }
         }
     }
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
-        println!("getattr(ino={})", ino);
+        trace!("getattr(ino={})", ino);
         match ino {
             1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
             2 => reply.attr(&TTL, &HELLO_TXT_ATTR),
@@ -124,7 +129,7 @@ impl Filesystem for SimpleFS {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
-        println!("read(ino={}, offset={} size={})", ino, offset, _size);
+        trace!("read(ino={}, offset={} size={})", ino, offset, _size);
         if ino == 2 {
             reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
         } else {
@@ -140,6 +145,7 @@ impl Filesystem for SimpleFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
+        trace!("readdir(ino={}, offset={})", ino, offset);
         if ino != 1 {
             reply.error(ENOENT);
             return;
