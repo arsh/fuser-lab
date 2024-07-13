@@ -4,6 +4,8 @@ use fuser::{
 };
 use libc::ENOENT;
 use std::ffi::OsStr;
+use std::fs::{self, File};
+use std::os::unix::fs::MetadataExt;
 use std::time::{Duration, UNIX_EPOCH};
 
 const TTL: Duration = Duration::from_secs(1); // 1 second
@@ -46,18 +48,64 @@ const HELLO_TXT_ATTR: FileAttr = FileAttr {
     blksize: 512,
 };
 
-pub struct SimpleFS;
+pub struct SimpleFS {
+    source_dir: String, // source directory
+}
+
+impl SimpleFS {
+    pub fn new(source_dir: String) -> Self {
+        SimpleFS { source_dir }
+    }
+
+    fn local_path(&self, path: &OsStr) -> String {
+        format!("{}/{}", self.source_dir, path.to_string_lossy())
+    }
+
+    fn file_attributes(&self, md: &fs::Metadata) -> FileAttr {
+        FileAttr {
+            ino: md.ino(),
+            size: md.size(),
+            blocks: md.blocks(),
+            atime: UNIX_EPOCH,
+            mtime: UNIX_EPOCH,
+            ctime: UNIX_EPOCH,
+            crtime: UNIX_EPOCH,
+            kind: FileType::RegularFile,
+            perm: md.mode() as u16,
+            nlink: 1,
+            uid: md.uid(),
+            gid: md.gid(),
+            rdev: 0,
+            flags: 0,
+            blksize: 512,
+        }
+    }
+}
 
 impl Filesystem for SimpleFS {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        if parent == 1 && name.to_str() == Some("hello.txt") {
-            reply.entry(&TTL, &HELLO_TXT_ATTR, 0);
-        } else {
+        println!("lookup(parent={}, name={:?})", parent, name);
+
+        if parent != 1 {
+            // we do not support directories
             reply.error(ENOENT);
+            return;
+        }
+
+        let md_result = fs::metadata(self.local_path(name));
+        match md_result {
+            Ok(md) => {
+                reply.entry(&TTL, &self.file_attributes(&md), 0);
+            }
+            Err(err) => {
+                println!("lookup error: {}", err);
+                reply.error(ENOENT);
+            }
         }
     }
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
+        println!("getattr(ino={})", ino);
         match ino {
             1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
             2 => reply.attr(&TTL, &HELLO_TXT_ATTR),
@@ -76,6 +124,7 @@ impl Filesystem for SimpleFS {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
+        println!("read(ino={}, offset={} size={})", ino, offset, _size);
         if ino == 2 {
             reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
         } else {

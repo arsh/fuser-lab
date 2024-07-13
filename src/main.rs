@@ -36,5 +36,8 @@ fn main() {
     if matches.get_flag("allow-root") {
         options.push(MountOption::AllowRoot);
     }
-    fuser::mount2(SimpleFS, mountpoint, &options).unwrap();
+
+    let source_dir = "/local/home/hernaa/ext4-source"; // TODO: take in as parameter
+
+    fuser::mount2(SimpleFS::new(source_dir.to_owned()), mountpoint, &options).unwrap();
 }
