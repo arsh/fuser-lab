@@ -3,9 +3,11 @@ use fuser::{
     Request,
 };
 use libc::ENOENT;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::os::unix::fs::MetadataExt;
+use std::sync::RwLock;
 use std::time::{Duration, UNIX_EPOCH};
 
 use tracing::{error, trace};
@@ -52,11 +54,15 @@ const HELLO_TXT_ATTR: FileAttr = FileAttr {
 
 pub struct SimpleFS {
     source_dir: String, // source directory
+    inodes: RwLock<HashMap<u64, String>>,
 }
 
 impl SimpleFS {
     pub fn new(source_dir: String) -> Self {
-        SimpleFS { source_dir }
+        SimpleFS {
+            source_dir,
+            inodes: RwLock::new(HashMap::new()),
+        }
     }
 
     fn local_path(&self, path: &OsStr) -> String {
@@ -93,6 +99,7 @@ impl Filesystem for SimpleFS {
         );
         if parent != 1 {
             // we do not support directories
+            error!("sub-directories are not supported");
             reply.error(ENOENT);
             return;
         }
@@ -100,7 +107,12 @@ impl Filesystem for SimpleFS {
         let md_result = fs::metadata(self.local_path(name));
         match md_result {
             Ok(md) => {
-                reply.entry(&TTL, &self.file_attributes(&md), 0);
+                let attr = self.file_attributes(&md);
+                self.inodes
+                    .write()
+                    .unwrap()
+                    .insert(attr.ino, name.to_string_lossy().into());
+                reply.entry(&TTL, &attr, 0);
             }
             Err(err) => {
                 error!("lookup error: {}", err);
@@ -117,7 +129,10 @@ impl Filesystem for SimpleFS {
             _ => reply.error(ENOENT),
         }
     }
-
+    fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
+        trace!("open(ino={})", ino);
+        reply.opened(0, 0);
+    }
     fn read(
         &mut self,
         _req: &Request,
@@ -129,11 +144,24 @@ impl Filesystem for SimpleFS {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
-        trace!("read(ino={}, offset={} size={})", ino, offset, _size);
-        if ino == 2 {
-            reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
-        } else {
-            reply.error(ENOENT);
+        trace!(
+            "read(ino={}, fh={}, offset={} size={})",
+            ino,
+            _fh,
+            offset,
+            _size
+        );
+        match self.inodes.read().unwrap().get(&ino) {
+            Some(_name) => {
+                reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
+                // let local_path = self.local_path(&OsStr::from(name));
+                // let mut file = File::open(local_path).unwrap();
+                // file.seek(std::io::SeekFrom::Start(offset as u64)).unwrap();
+                // let mut buf = [0; 1024];
+                // let n = file.read(&mut buf).unwrap();
+                // reply.data(&buf[..n]);
+            }
+            None => reply.error(ENOENT),
         }
     }
 
