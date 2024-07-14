@@ -4,9 +4,10 @@ use fuser::{
 };
 use libc::ENOENT;
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::RwLock;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -139,7 +140,7 @@ impl Filesystem for SimpleFS {
         ino: u64,
         _fh: u64,
         offset: i64,
-        _size: u32,
+        size: u32,
         _flags: i32,
         _lock: Option<u64>,
         reply: ReplyData,
@@ -149,17 +150,29 @@ impl Filesystem for SimpleFS {
             ino,
             _fh,
             offset,
-            _size
+            size
         );
         match self.inodes.read().unwrap().get(&ino) {
-            Some(_name) => {
-                reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
-                // let local_path = self.local_path(&OsStr::from(name));
-                // let mut file = File::open(local_path).unwrap();
-                // file.seek(std::io::SeekFrom::Start(offset as u64)).unwrap();
-                // let mut buf = [0; 1024];
-                // let n = file.read(&mut buf).unwrap();
-                // reply.data(&buf[..n]);
+            Some(name) => {
+                let local_path = self.local_path(&OsStr::from_bytes(name.as_bytes()));
+                trace!("reading local path: {}", local_path);
+                let file = match File::open(local_path) {
+                    Ok(f) => f,
+                    Err(error) => {
+                        error!("open error: {}", error);
+                        reply.error(ENOENT);
+                        return;
+                    }
+                };
+                let mut buf = vec![0; size as usize];
+                match file.read_at(&mut buf, offset as u64) {
+                    Ok(n) => reply.data(&buf[..n]),
+                    Err(error) => {
+                        error!("read error: {}", error);
+                        reply.error(ENOENT);
+                        return;
+                    }
+                };
             }
             None => reply.error(ENOENT),
         }
