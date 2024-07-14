@@ -1,10 +1,9 @@
 use fuser::{
-    FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
-    Request,
+    FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
 };
 use libc::ENOENT;
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, MetadataExt};
@@ -32,8 +31,6 @@ const HELLO_DIR_ATTR: FileAttr = FileAttr {
     flags: 0,
     blksize: 512,
 };
-
-const HELLO_TXT_CONTENT: &str = "Hello World!\n";
 
 const HELLO_TXT_ATTR: FileAttr = FileAttr {
     ino: 2,
@@ -124,10 +121,21 @@ impl Filesystem for SimpleFS {
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
         trace!("getattr(ino={})", ino);
-        match ino {
-            1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
-            2 => reply.attr(&TTL, &HELLO_TXT_ATTR),
-            _ => reply.error(ENOENT),
+
+        match self.inodes.read().unwrap().get(&ino) {
+            Some(name) => {
+                let local_path = self.local_path(&OsStr::from_bytes(name.as_bytes()));
+                let md = match fs::metadata(local_path) {
+                    Ok(md) => md,
+                    Err(err) => {
+                        error!("getattr error: {}", err);
+                        reply.error(ENOENT);
+                        return;
+                    }
+                };
+                reply.attr(&TTL, &self.file_attributes(&md));
+            }
+            None => reply.error(ENOENT),
         }
     }
     fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
