@@ -1,0 +1,1 @@
+Repo that contains a very simple FS based on FUSER. It only supports limited amount of operations for a read-only filesystem that is actually backed by an existing (typically EXT4) source. Essentially just a proxy to test the overhead and performance implications of the FUSE layer.
