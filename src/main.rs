@@ -6,7 +6,7 @@ use tracing_subscriber;
 mod simple;
 fn setup_logging() {
     let default_subscriber = tracing_subscriber::fmt::Subscriber::builder()
-        .with_max_level(tracing::Level::TRACE)
+        .with_max_level(tracing::Level::INFO)
         .finish();
     tracing::subscriber::set_global_default(default_subscriber)
         .expect("setting tracing default failed");

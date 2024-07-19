@@ -6,49 +6,13 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{FileExt, MetadataExt};
+use std::os::unix::fs::{DirEntryExt, FileExt, MetadataExt};
 use std::sync::RwLock;
 use std::time::{Duration, UNIX_EPOCH};
 
 use tracing::{error, trace};
 
 const TTL: Duration = Duration::from_secs(1); // 1 second
-
-const HELLO_DIR_ATTR: FileAttr = FileAttr {
-    ino: 1,
-    size: 0,
-    blocks: 0,
-    atime: UNIX_EPOCH, // 1970-01-01 00:00:00
-    mtime: UNIX_EPOCH,
-    ctime: UNIX_EPOCH,
-    crtime: UNIX_EPOCH,
-    kind: FileType::Directory,
-    perm: 0o755,
-    nlink: 2,
-    uid: 501,
-    gid: 20,
-    rdev: 0,
-    flags: 0,
-    blksize: 512,
-};
-
-const HELLO_TXT_ATTR: FileAttr = FileAttr {
-    ino: 2,
-    size: 13,
-    blocks: 1,
-    atime: UNIX_EPOCH, // 1970-01-01 00:00:00
-    mtime: UNIX_EPOCH,
-    ctime: UNIX_EPOCH,
-    crtime: UNIX_EPOCH,
-    kind: FileType::RegularFile,
-    perm: 0o644,
-    nlink: 1,
-    uid: 501,
-    gid: 20,
-    rdev: 0,
-    flags: 0,
-    blksize: 512,
-};
 
 pub struct SimpleFS {
     source_dir: String, // source directory
@@ -57,9 +21,11 @@ pub struct SimpleFS {
 
 impl SimpleFS {
     pub fn new(source_dir: String) -> Self {
+        let mut inodes: HashMap<u64, String> = HashMap::new();
+        inodes.insert(1, ".".into());
         SimpleFS {
             source_dir,
-            inodes: RwLock::new(HashMap::new()),
+            inodes: RwLock::new(inodes),
         }
     }
 
@@ -76,7 +42,7 @@ impl SimpleFS {
             mtime: UNIX_EPOCH,
             ctime: UNIX_EPOCH,
             crtime: UNIX_EPOCH,
-            kind: FileType::RegularFile,
+            kind: self.file_type(md),
             perm: md.mode() as u16,
             nlink: 1,
             uid: md.uid(),
@@ -84,6 +50,14 @@ impl SimpleFS {
             rdev: 0,
             flags: 0,
             blksize: 512,
+        }
+    }
+
+    fn file_type(&self, md: &fs::Metadata) -> FileType {
+        if md.is_dir() {
+            FileType::Directory
+        } else {
+            FileType::RegularFile
         }
     }
 }
@@ -133,7 +107,10 @@ impl Filesystem for SimpleFS {
                         return;
                     }
                 };
-                reply.attr(&TTL, &self.file_attributes(&md));
+                trace!("metadata for {}: {:?}", name, md);
+                let file_attributes = self.file_attributes(&md);
+                trace!("file attributes for {}: {:?}", name, file_attributes);
+                reply.attr(&TTL, &file_attributes);
             }
             None => reply.error(ENOENT),
         }
@@ -199,19 +176,36 @@ impl Filesystem for SimpleFS {
             reply.error(ENOENT);
             return;
         }
+        let entries = match fs::read_dir(&self.source_dir) {
+            Ok(res) => res,
+            Err(error) => {
+                error!("readdir error: {}", error);
+                reply.error(ENOENT);
+                return;
+            }
+        };
 
-        let entries = vec![
-            (1, FileType::Directory, "."),
-            (1, FileType::Directory, ".."),
-            (2, FileType::RegularFile, "hello.txt"),
-        ];
+        for (i, entry) in entries.enumerate().skip(offset as usize) {
+            trace!("processing entry: {:?}", entry);
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    error!("readdir error: {}", error);
+                    reply.error(ENOENT);
+                    return;
+                }
+            };
 
-        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-            // i + 1 means the index of the next entry
-            if reply.add(entry.0, (i + 1) as i64, entry.1, entry.2) {
+            if reply.add(
+                entry.ino(),
+                (i + 1) as i64,
+                self.file_type(&entry.metadata().expect("could not read entry metadata")),
+                &entry.file_name(),
+            ) {
                 break;
             }
         }
+
         reply.ok();
     }
 }
