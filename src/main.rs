@@ -14,29 +14,33 @@ fn setup_logging() {
 fn main() {
     setup_logging();
 
-    let matches = Command::new("simple")
-        .version(crate_version!())
-        .author("arsh")
-        .arg(
-            Arg::new("MOUNT_POINT")
-                .required(true)
-                .index(1)
-                .help("Act as a client, and mount FUSE at given path"),
-        )
-        .arg(
-            Arg::new("auto_unmount")
-                .long("auto_unmount")
-                .action(ArgAction::SetTrue)
-                .help("Automatically unmount on process exit"),
-        )
-        .arg(
-            Arg::new("allow-root")
-                .long("allow-root")
-                .action(ArgAction::SetTrue)
-                .help("Allow root user to access filesystem"),
-        )
-        .get_matches();
+    let matches =
+        Command::new("simple")
+            .version(crate_version!())
+            .arg(Arg::new("SOURCE_DIRECTORY").required(true).index(1).help(
+                "Source directory. Typically a local filesystem that actually holds the files.",
+            ))
+            .arg(
+                Arg::new("MOUNT_POINT")
+                    .required(true)
+                    .index(2)
+                    .help("Act as a client, and mount FUSE at given path"),
+            )
+            .arg(
+                Arg::new("auto_unmount")
+                    .long("auto_unmount")
+                    .action(ArgAction::SetTrue)
+                    .help("Automatically unmount on process exit"),
+            )
+            .arg(
+                Arg::new("allow-root")
+                    .long("allow-root")
+                    .action(ArgAction::SetTrue)
+                    .help("Allow root user to access filesystem"),
+            )
+            .get_matches();
     env_logger::init();
+    let source_dir = matches.get_one::<String>("SOURCE_DIRECTORY").unwrap();
     let mountpoint = matches.get_one::<String>("MOUNT_POINT").unwrap();
     let mut options = vec![MountOption::RO, MountOption::FSName("simple".to_string())];
     if matches.get_flag("auto_unmount") {
@@ -45,8 +49,6 @@ fn main() {
     if matches.get_flag("allow-root") {
         options.push(MountOption::AllowRoot);
     }
-
-    let source_dir = "/local/home/hernaa/ext4-source"; // TODO: take in as parameter
 
     fuser::mount2(SimpleFS::new(source_dir.to_owned()), mountpoint, &options).unwrap();
 }
