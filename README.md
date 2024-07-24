@@ -27,3 +27,16 @@ hello.txt  ten_gb.bin  world.txt
 hello from ext4
 
 ```
+
+## Performance
+
+```
+# reading through the simple fs
+~ » time cat ~/mnt/ten_gb.bin > /dev/null
+cat ~/mnt/ten_gb.bin > /dev/null  0.07s user 3.32s system 61% cpu 5.513 total
+
+# reading directly from ext4
+~ » time cat ~/ext4-source/ten_gb.bin > /dev/null
+cat ~/ext4-source/ten_gb.bin > /dev/null  0.05s user 1.39s system 99% cpu 1.441 total
+
+```
