@@ -7,6 +7,7 @@ use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirEntryExt, FileExt, MetadataExt};
+use std::sync::atomic::AtomicUsize;
 use std::sync::RwLock;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -14,9 +15,12 @@ use tracing::{error, trace};
 
 const TTL: Duration = Duration::from_secs(1); // 1 second
 
+static NEXT_FH_ID: AtomicUsize = AtomicUsize::new(0);
+
 pub struct SimpleFS {
     source_dir: String, // source directory
     inodes: RwLock<HashMap<u64, String>>,
+    file_handles: RwLock<HashMap<u64, File>>,
 }
 
 impl SimpleFS {
@@ -26,7 +30,12 @@ impl SimpleFS {
         SimpleFS {
             source_dir,
             inodes: RwLock::new(inodes),
+            file_handles: RwLock::new(HashMap::new()),
         }
+    }
+
+    pub fn next_fh_id(&self) -> u64 {
+        NEXT_FH_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst) as u64 + 1
     }
 
     fn local_path(&self, path: &OsStr) -> String {
@@ -117,7 +126,25 @@ impl Filesystem for SimpleFS {
     }
     fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
         trace!("open(ino={})", ino);
-        reply.opened(0, 0);
+        if let Some(name) = self.inodes.read().unwrap().get(&ino) {
+            let local_path = self.local_path(&OsStr::from_bytes(name.as_bytes()));
+            trace!("opening local path: {}", local_path);
+            let fh = match File::open(local_path) {
+                Ok(f) => {
+                    let fh = self.next_fh_id();
+                    self.file_handles.write().unwrap().insert(fh, f);
+                    fh
+                }
+                Err(error) => {
+                    error!("open error: {}", error);
+                    reply.error(ENOENT);
+                    return;
+                }
+            };
+            reply.opened(fh, 0);
+        } else {
+            reply.error(ENOENT);
+        }
     }
     fn read(
         &mut self,
@@ -137,29 +164,31 @@ impl Filesystem for SimpleFS {
             offset,
             size
         );
-        match self.inodes.read().unwrap().get(&ino) {
-            Some(name) => {
-                let local_path = self.local_path(&OsStr::from_bytes(name.as_bytes()));
-                trace!("reading local path: {}", local_path);
-                let file = match File::open(local_path) {
-                    Ok(f) => f,
-                    Err(error) => {
-                        error!("open error: {}", error);
-                        reply.error(ENOENT);
-                        return;
-                    }
-                };
-                let mut buf = vec![0; size as usize];
-                match file.read_at(&mut buf, offset as u64) {
-                    Ok(n) => reply.data(&buf[..n]),
-                    Err(error) => {
-                        error!("read error: {}", error);
-                        reply.error(ENOENT);
-                        return;
-                    }
-                };
-            }
-            None => reply.error(ENOENT),
+
+        if let Some(name) = self.inodes.read().unwrap().get(&ino) {
+            let local_path = self.local_path(&OsStr::from_bytes(name.as_bytes()));
+            trace!("reading local path: {}", local_path);
+            let read_lock = self.file_handles.read().unwrap();
+            let fh = read_lock.get(&_fh);
+            let file = match fh {
+                Some(f) => f,
+                None => {
+                    error!("file not found");
+                    reply.error(ENOENT);
+                    return;
+                }
+            };
+            let mut buf = vec![0; size as usize];
+            match file.read_at(&mut buf, offset as u64) {
+                Ok(n) => reply.data(&buf[..n]),
+                Err(error) => {
+                    error!("read error: {}", error);
+                    reply.error(ENOENT);
+                    return;
+                }
+            };
+        } else {
+            reply.error(ENOENT);
         }
     }
 
