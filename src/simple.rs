@@ -15,7 +15,7 @@ use tracing::{error, trace};
 
 const TTL: Duration = Duration::from_secs(1); // 1 second
 
-static NEXT_FH_ID: AtomicUsize = AtomicUsize::new(0);
+static NEXT_FH_ID: AtomicUsize = AtomicUsize::new(1);
 
 pub struct SimpleFS {
     source_dir: String, // source directory
@@ -146,11 +146,28 @@ impl Filesystem for SimpleFS {
             reply.error(ENOENT);
         }
     }
+
+    fn release(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        fh: u64,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        _flush: bool,
+        reply: fuser::ReplyEmpty,
+    ) {
+        trace!("release(ino={}, fh={})", _ino, fh);
+        let mut file_handles = self.file_handles.write().unwrap();
+        file_handles.remove_entry(&fh);
+        reply.ok();
+    }
+
     fn read(
         &mut self,
         _req: &Request,
         ino: u64,
-        _fh: u64,
+        fh: u64,
         offset: i64,
         size: u32,
         _flags: i32,
@@ -160,7 +177,7 @@ impl Filesystem for SimpleFS {
         trace!(
             "read(ino={}, fh={}, offset={} size={})",
             ino,
-            _fh,
+            fh,
             offset,
             size
         );
@@ -168,8 +185,8 @@ impl Filesystem for SimpleFS {
         if let Some(name) = self.inodes.read().unwrap().get(&ino) {
             let local_path = self.local_path(&OsStr::from_bytes(name.as_bytes()));
             trace!("reading local path: {}", local_path);
-            let read_lock = self.file_handles.read().unwrap();
-            let fh = read_lock.get(&_fh);
+            let file_handles = self.file_handles.read().unwrap();
+            let fh = file_handles.get(&fh);
             let file = match fh {
                 Some(f) => f,
                 None => {
